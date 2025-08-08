@@ -10,9 +10,15 @@ import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.get
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.pointed
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
+import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
+import platform.AVFAudio.AVAudioEngine
+import platform.AVFAudio.AVAudioInputNode
+import platform.AVFAudio.AVAudioPCMBuffer
 import platform.AVFAudio.AVAudioQuality
 import platform.AVFAudio.AVAudioRecorder
 import platform.AVFAudio.AVAudioSession
@@ -32,8 +38,17 @@ import platform.Foundation.NSURL.Companion.fileURLWithPath
 
 internal actual object RecordCore {
     private var recorder: AVAudioRecorder? = null
+    private var audioEngine: AVAudioEngine? = null
+    private var inputNode: AVAudioInputNode? = null
     private var output: String? = null
     private var isRecording: Boolean = false
+
+    // Replace StateFlow with callback
+    private var audioDataCallback: ((ByteArray?) -> Unit)? = null
+
+    actual fun setAudioDataCallback(callback: ((ByteArray?) -> Unit)?) {
+        audioDataCallback = callback
+    }
 
     @OptIn(ExperimentalForeignApi::class)
     @Throws(RecordFailException::class)
@@ -43,6 +58,10 @@ internal actual object RecordCore {
 
         output = config.getOutput()
 
+        // Setup AVAudioEngine for real-time audio data capture
+        setupAudioEngine(config)
+
+        // Setup AVAudioRecorder for file recording
         val settings = mapOf<Any?, Any>(
             AVFormatIDKey to config.outputFormat.toAVFormatID(),
             AVSampleRateKey to config.sampleRate,
@@ -66,13 +85,32 @@ internal actual object RecordCore {
             if (!it.record()) {
                 throw RecordFailException()
             }
-            isRecording = true
+        } ?: throw RecordFailException()
+
+        // Start audio engine
+        audioEngine?.let { engine ->
+            try {
+                engine.startAndReturnError(null)
+                isRecording = true
+            } catch (e: Exception) {
+                throw RecordFailException()
+            }
         } ?: throw RecordFailException()
     }
 
     internal actual fun stopRecording(config: RecordConfig): String {
         isRecording = false
+
+        // Stop audio engine
+        audioEngine?.stop()
+        audioEngine = null
+        inputNode = null
+
+        // Stop recorder
         recorder?.stop()
+
+        // Clear audio data callback
+        audioDataCallback?.invoke(null)
 
         return output.also {
             output = null
@@ -82,6 +120,61 @@ internal actual object RecordCore {
 
     internal actual fun isRecording(): Boolean = isRecording
 
+    @OptIn(ExperimentalForeignApi::class)
+    private fun setupAudioEngine(config: RecordConfig) {
+        audioEngine = AVAudioEngine()
+        inputNode = audioEngine?.inputNode
+
+        inputNode?.let { input ->
+            val inputFormat = input.outputFormatForBus(0u)
+
+            // Install tap to capture audio data
+            input.installTapOnBus(0u, 1024u, inputFormat) { buffer, _ ->
+                buffer?.let { audioBuffer ->
+                    extractAudioData(audioBuffer)
+                }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalForeignApi::class)
+    private fun extractAudioData(buffer: AVAudioPCMBuffer) {
+        val frameLength = buffer.frameLength.toInt()
+        val channelCount = buffer.format.channelCount.toInt()
+
+        if (frameLength > 0 && channelCount > 0) {
+            // Extract audio data as ByteArray
+            val audioData = ByteArray(frameLength * channelCount * 2) // 16-bit = 2 bytes per sample
+
+            // Convert audio buffer to ByteArray
+            buffer.floatChannelData?.let { channelDataPtr ->
+                // Get the first channel data pointer using proper cinterop syntax
+                val firstChannelPtr = channelDataPtr[0]
+
+                if (firstChannelPtr != null) {
+                    for (i in 0 until frameLength) {
+                        // Access float value using array index notation
+                        val floatValue = firstChannelPtr[i]
+
+                        // Ensure it's treated as a Float and convert to 16-bit signed integer
+                        val floatSample = floatValue
+                        val sample = (floatSample * Short.MAX_VALUE.toFloat()).toInt()
+                            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+
+                        val byteIndex = i * 2
+                        if (byteIndex + 1 < audioData.size) {
+                            // Store as little-endian (low byte first, then high byte)
+                            audioData[byteIndex] = (sample.toInt() and 0xFF).toByte()
+                            audioData[byteIndex + 1] = ((sample.toInt() shr 8) and 0xFF).toByte()
+                        }
+                    }
+                }
+            }
+
+            // Call callback with real-time audio data
+            audioDataCallback?.invoke(audioData)
+        }
+    }
 
     /**
      * Config and Activate AVAudioSession

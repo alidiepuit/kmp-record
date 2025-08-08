@@ -6,4 +6,5 @@ internal expect object RecordCore {
     internal fun startRecording(config: RecordConfig)
     internal fun stopRecording(config: RecordConfig): String
     internal fun isRecording(): Boolean
+    internal fun setAudioDataCallback(callback: ((ByteArray?) -> Unit)?)
 }
