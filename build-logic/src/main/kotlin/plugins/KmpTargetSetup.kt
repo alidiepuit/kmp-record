@@ -9,9 +9,9 @@ fun KotlinMultiplatformExtension.setupKmpTargets(
 ) {
     androidTarget {
         compilations.all {
-            kotlinOptions {
-                jvmTarget = Config.javaVersion.toString()
-            }
+            (this as? org.jetbrains.kotlin.gradle.plugin.mpp.KotlinJvmCompilation)?.compilerOptions?.options?.jvmTarget?.set(
+                org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(Config.javaVersion.toString())
+            )
         }
     }
 

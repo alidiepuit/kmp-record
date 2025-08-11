@@ -7,9 +7,21 @@ struct ComposeView: UIViewControllerRepresentable {
         MainViewControllerKt.MainViewController()
     }
 
+    func makeCoordinator() -> ComposeCoordinator {
+        return ComposeCoordinator()
+    }
+
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 }
 
+class ComposeCoordinator {
+
+    init() {
+         DependencyInjectionKt.doInitDependencyFramework(
+
+         )
+    }
+}
 struct ContentView: View {
     var body: some View {
         ComposeView()

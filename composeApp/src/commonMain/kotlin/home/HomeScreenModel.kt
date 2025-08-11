@@ -1,9 +1,9 @@
 package home
 
 import androidx.compose.runtime.mutableStateOf
-import cafe.adriel.voyager.core.model.ScreenModel
+import androidx.lifecycle.ViewModel
 
-class HomeScreenModel : ScreenModel {
+class HomeScreenModel : ViewModel() {
     val uiState = mutableStateOf(UiState())
 
     init {
